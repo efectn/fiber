@@ -162,6 +162,16 @@ func (app *App) handler(rctx *fasthttp.RequestCtx) {
 	if match && app.config.ETag {
 		setETag(c, false)
 	}
+	// Load sub-views
+	if app.views != nil {
+		for prefix, view := range app.views {
+			fmt.Print(view.Load())
+			if err := view.Load(); err != nil && strings.HasPrefix(c.path, prefix) {
+				fmt.Print("dssd")
+				fmt.Printf("views: %v\n", err)
+			}
+		}
+	}
 	// Release Ctx
 	app.ReleaseCtx(c)
 }

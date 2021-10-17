@@ -111,6 +111,8 @@ type App struct {
 	getString func(b []byte) string
 	// mount prefix -> error handler
 	errorHandlers map[string]ErrorHandler
+	// mount prefix -> sub view
+	views map[string]Views
 }
 
 // Config is a struct holding the server settings.
@@ -432,6 +434,7 @@ func New(config ...Config) *App {
 		getBytes:      utils.UnsafeBytes,
 		getString:     utils.UnsafeString,
 		errorHandlers: make(map[string]ErrorHandler),
+		views:         make(map[string]Views),
 	}
 	// Override config if provided
 	if len(config) > 0 {
@@ -512,6 +515,16 @@ func (app *App) Mount(prefix string, fiber *App) Router {
 	for mountedPrefixes, errHandler := range fiber.errorHandlers {
 		app.errorHandlers[prefix+mountedPrefixes] = errHandler
 	}
+
+	// Save the fiber's views and its sub apps
+	prefix = strings.TrimRight(prefix, "/")
+	if fiber.config.Views != nil {
+		app.views[prefix] = fiber.config.Views
+	}
+	for mountedPrefixes, views := range fiber.views {
+		app.views[prefix+mountedPrefixes] = views
+	}
+	fmt.Println(app.views)
 
 	atomic.AddUint32(&app.handlerCount, fiber.handlerCount)
 
@@ -900,6 +913,16 @@ func (app *App) ErrorHandler(ctx *Ctx, err error) error {
 
 	if mountedErrHandler != nil {
 		return mountedErrHandler(ctx, err)
+	}
+
+	if app.views != nil {
+		for prefix, view := range app.views {
+			fmt.Print(&view)
+			if err := view.Load(); err != nil && strings.HasPrefix(ctx.path, prefix) {
+				fmt.Print("dssd")
+				fmt.Printf("views: %v\n", err)
+			}
+		}
 	}
 
 	return app.config.ErrorHandler(ctx, err)
