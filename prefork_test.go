@@ -67,6 +67,29 @@ func Test_App_Prefork_Master_Process(t *testing.T) {
 	utils.AssertEqual(t, false, err == nil)
 }
 
+func Test_App_Prefork_Master_Process_DisableReusePort(t *testing.T) {
+	// Reset test var
+	testPreforkMaster = true
+
+	app := New(Config{
+		PreforkOptions: PreforkOptions{
+			DisableReusePort: true,
+		},
+	})
+
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		utils.AssertEqual(t, nil, app.Shutdown())
+	}()
+
+	utils.AssertEqual(t, nil, app.prefork(NetworkTCP4, ":3000", nil))
+
+	dummyChildCmd = "invalid"
+
+	err := app.prefork(NetworkTCP4, "127.0.0.1:", nil)
+	utils.AssertEqual(t, false, err == nil)
+}
+
 func Test_App_Prefork_Child_Process_Never_Show_Startup_Message(t *testing.T) {
 	setupIsChild(t)
 	defer teardownIsChild(t)

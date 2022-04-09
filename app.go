@@ -128,6 +128,11 @@ type Config struct {
 	// Default: false
 	Prefork bool `json:"prefork"`
 
+	// To give specific prefork options, you can use these config fields.
+	//
+	// Defaultly, it enables reuse port and uses all cores of cpu for MaxPIDs.
+	PreforkOptions PreforkOptions `json:"prefork_options"`
+
 	// Enables the "Server: value" HTTP header.
 	//
 	// Default: ""
@@ -370,6 +375,12 @@ type Config struct {
 	EnablePrintRoutes bool `json:"enable_print_routes"`
 }
 
+// A struct to define specific prefork options.
+type PreforkOptions struct {
+	MaxPIDs          int  `json:"max_cpu_cores"`
+	DisableReusePort bool `json:"disable_reuse_port"`
+}
+
 // Static defines configuration options when defining static assets.
 type Static struct {
 	// When set to true, the server tries minimizing CPU usage by caching compressed files.
@@ -472,6 +483,12 @@ func New(config ...Config) *App {
 	// Override config if provided
 	if len(config) > 0 {
 		app.config = config[0]
+	}
+
+	if app.config.PreforkOptions == (PreforkOptions{}) {
+		app.config.PreforkOptions = PreforkOptions{
+			MaxPIDs: runtime.GOMAXPROCS(0),
+		}
 	}
 
 	if app.config.ETag {
@@ -1216,7 +1233,7 @@ func (app *App) startupMessage(addr string, tls bool, pids string) {
 		isPrefork = "Enabled"
 	}
 
-	procs := strconv.Itoa(runtime.GOMAXPROCS(0))
+	procs := strconv.Itoa(app.config.PreforkOptions.MaxPIDs)
 	if !app.config.Prefork {
 		procs = "1"
 	}

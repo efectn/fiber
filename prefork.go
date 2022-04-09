@@ -26,6 +26,27 @@ func IsChild() bool {
 	return os.Getenv(envPreforkChildKey) == envPreforkChildVal
 }
 
+func setTCPListenerFiles(network, addr string) (*net.TCPListener, []*os.File, error) {
+	tcpAddr, err := net.ResolveTCPAddr(network, addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tcplistener, err := net.ListenTCP(network, tcpAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fl, err := tcplistener.File()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	files := []*os.File{fl}
+
+	return tcplistener, files, nil
+}
+
 // prefork manages child processes to make use of the OS REUSEPORT or REUSEADDR feature
 func (app *App) prefork(network, addr string, tlsConfig *tls.Config) (err error) {
 	// 👶 child process 👶
@@ -33,14 +54,26 @@ func (app *App) prefork(network, addr string, tlsConfig *tls.Config) (err error)
 		// use 1 cpu core per child process
 		runtime.GOMAXPROCS(1)
 		var ln net.Listener
-		// Linux will use SO_REUSEPORT and Windows falls back to SO_REUSEADDR
-		// Only tcp4 or tcp6 is supported when preforking, both are not supported
-		if ln, err = reuseport.Listen(network, addr); err != nil {
-			if !app.config.DisableStartupMessage {
-				time.Sleep(100 * time.Millisecond) // avoid colliding with startup message
+
+		if app.config.PreforkOptions.DisableReusePort {
+			if runtime.GOOS == "windows" {
+				return fmt.Errorf("prefork: you must use reuse port when to run app on Windows")
 			}
-			return fmt.Errorf("prefork: %v", err)
+			ln, err = net.FileListener(os.NewFile(3, ""))
+			if err != nil {
+				return fmt.Errorf("prefork: %v", err)
+			}
+		} else {
+			// Linux will use SO_REUSEPORT and Windows falls back to SO_REUSEADDR
+			// Only tcp4 or tcp6 is supported when preforking, both are not supported
+			if ln, err = reuseport.Listen(network, addr); err != nil {
+				if !app.config.DisableStartupMessage {
+					time.Sleep(100 * time.Millisecond) // avoid colliding with startup message
+				}
+				return fmt.Errorf("prefork: %v", err)
+			}
 		}
+
 		// wrap a tls config around the listener if provided
 		if tlsConfig != nil {
 			ln = tls.NewListener(ln, tlsConfig)
@@ -56,13 +89,33 @@ func (app *App) prefork(network, addr string, tlsConfig *tls.Config) (err error)
 		return app.server.Serve(ln)
 	}
 
+	var files []*os.File
+	if app.config.PreforkOptions.DisableReusePort {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("prefork: you must use reuse port when to run app on Windows")
+		}
+
+		var ln *net.TCPListener
+		if ln, files, err = setTCPListenerFiles(network, addr); err != nil {
+			return fmt.Errorf("prefork: %v", err)
+		}
+
+		// defer for closing the net.Listener opened by setTCPListenerFiles.
+		defer func() {
+			e := ln.Close()
+			if err == nil {
+				err = e
+			}
+		}()
+	}
+
 	// 👮 master process 👮
 	type child struct {
 		pid int
 		err error
 	}
 	// create variables
-	max := runtime.GOMAXPROCS(0)
+	max := app.config.PreforkOptions.MaxPIDs
 	childs := make(map[int]*exec.Cmd)
 	channel := make(chan child, max)
 
@@ -88,6 +141,7 @@ func (app *App) prefork(network, addr string, tlsConfig *tls.Config) (err error)
 		}
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		cmd.ExtraFiles = files
 
 		// add fiber prefork child flag into child proc env
 		cmd.Env = append(os.Environ(),
